@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+node_modules/
+.venv/
+build/
+dist/
+*.mp4
+*.avi
+*.bag
+*.gif

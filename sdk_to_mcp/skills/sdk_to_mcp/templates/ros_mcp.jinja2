@@ -1,0 +1,232 @@
+"""
+ROS/ROS2 MCP Server 模板
+
+适用于 ROS/ROS2 接口的硬件（如 UR5 机械臂）
+包含 ROS Topic/Service/Action 封装
+"""
+
+import asyncio
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionClient
+from typing import Optional, List, Dict, Any
+from dataclasses import dataclass
+from mcp.server.fastmcp import FastMCP
+
+# Initialize MCP Server
+mcp = FastMCP("{{ target_name }}")
+
+
+@dataclass
+class ROSMessage:
+    """ROS 消息封装"""
+    topic: str
+    msg_type: str
+    data: Dict[str, Any]
+
+
+class {{ server_class_name }}ROSNode(Node):
+    """
+    {{ hardware_info.name | default('ROS Hardware') }} ROS2 节点
+
+    功能:
+    - Topic 发布/订阅
+    - Service 调用
+    - Action 客户端
+    """
+
+    def __init__(self, node_name: str = "{{ target_name | replace('-', '_') }}_node"):
+        super().__init__(node_name)
+
+        # 安全限位
+        self.safety_limits = {{ hardware_info.safety_limits | default({}) | tojson }}
+
+        # 存储最新的传感器数据
+        self.latest_sensor_data: Dict[str, Any] = {}
+
+        {% if states %}
+        # 创建传感器数据订阅
+        {% for state in states %}
+        self.create_subscription(
+            msg_type=None,  # TODO: 指定实际的 ROS 消息类型
+            topic="/{{ state.name }}",
+            callback=self._on_{{ state.name }}_received,
+            qos_profile=10
+        )
+        {% endfor %}
+        {% endif %}
+
+        self.get_logger().info(f"{{ target_name }} ROS 节点已启动")
+
+    {% for state in states %}
+    def _on_{{ state.name }}_received(self, msg):
+        """处理 {{ state.name }} 数据"""
+        # TODO: 解析实际的 ROS 消息
+        self.latest_sensor_data["{{ state.name }}"] = msg
+    {% endfor %}
+
+    def _validate_safety(self, **kwargs) -> tuple[bool, str]:
+        """安全限位检查"""
+        {% if hardware_info.safety_limits %}
+        {% for limit_name, limit_value in hardware_info.safety_limits.items() %}
+        if "{{ limit_name }}" in kwargs:
+            val = kwargs["{{ limit_name }}"]
+            if abs(val) > {{ limit_value }}:
+                return False, f"{{ limit_name }} 超出安全限位: {{ limit_value }}"
+        {% endfor %}
+        {% endif %}
+        return True, "OK"
+
+    def publish_command(self, topic: str, msg) -> bool:
+        """发布命令到 Topic"""
+        try:
+            publisher = self.create_publisher(type(msg), topic, 10)
+            publisher.publish(msg)
+            return True
+        except Exception as e:
+            self.get_logger().error(f"发布失败: {e}")
+            return False
+
+
+# Global ROS node instance
+_ros_node: Optional[{{ server_class_name }}ROSNode] = None
+_spin_task: Optional[asyncio.Task] = None
+
+
+async def _ros_spin():
+    """后台 ROS spin 循环"""
+    global _ros_node
+
+    while rclpy.ok() and _ros_node:
+        rclpy.spin_once(_ros_node, timeout_sec=0.1)
+        await asyncio.sleep(0.01)
+
+
+{% for action in actions %}
+@mcp.tool()
+async def {{ action.name }}(
+    {% for param_name, param_type in action.params.items() %}
+    {{ param_name }}: {{ param_type }}{% if not loop.last %},{% endif %}
+    {% endfor %}
+) -> str:
+    """
+    {{ action.description }}
+    """
+    global _ros_node, _spin_task
+
+    if _ros_node is None:
+        return "错误: ROS 节点未初始化"
+
+    # 安全限位检查
+    valid, msg = _ros_node._validate_safety({% for param_name in action.params.keys() %}{{ param_name }}={{ param_name }}{% if not loop.last %}, {% endif %}{% endfor %})
+    if not valid:
+        return f"安全限位检查失败: {msg}"
+
+    try:
+        # TODO: 构建 ROS 消息并发布
+        # msg = Twist()
+        # msg.linear.x = linear_x
+        # _ros_node.publish_command("/cmd_vel", msg)
+
+        _ros_node.get_logger().info(f"执行 {{ action.name }}")
+        return f"✓ {{ action.description }} 执行成功"
+
+    except Exception as e:
+        return f"错误: {e}"
+
+
+{% endfor %}
+
+{% for state in states %}
+@mcp.resource("{{ state.name }}://current")
+async def get_{{ state.name }}() -> str:
+    """
+    {{ state.description }}
+    {% if state.unit %}单位: {{ state.unit }}{% endif %}
+    """
+    global _ros_node
+
+    if _ros_node is None:
+        return "ROS 节点未初始化"
+
+    try:
+        data = _ros_node.latest_sensor_data.get("{{ state.name }}")
+        if data:
+            return f"{{ state.name }}: {data}"
+        return f"{{ state.name }}: 暂无数据"
+    except Exception as e:
+        return f"读取失败: {e}"
+
+
+{% endfor %}
+
+@mcp.tool()
+async def initialize_ros(node_name: Optional[str] = None) -> str:
+    """
+    初始化 ROS2 节点
+
+    Args:
+        node_name: 节点名称（可选）
+    """
+    global _ros_node, _spin_task
+
+    try:
+        if _ros_node is not None:
+            return "ROS 节点已初始化"
+
+        rclpy.init()
+
+        if node_name:
+            _ros_node = {{ server_class_name }}ROSNode(node_name)
+        else:
+            _ros_node = {{ server_class_name }}ROSNode()
+
+        # 启动后台 spin 任务
+        _spin_task = asyncio.create_task(_ros_spin())
+
+        return f"✓ ROS 节点已初始化: {_ros_node.get_name()}"
+
+    except Exception as e:
+        return f"初始化失败: {e}"
+
+
+@mcp.tool()
+async def shutdown_ros() -> str:
+    """关闭 ROS2 节点"""
+    global _ros_node, _spin_task
+
+    try:
+        if _spin_task:
+            _spin_task.cancel()
+            try:
+                await _spin_task
+            except asyncio.CancelledError:
+                pass
+            _spin_task = None
+
+        if _ros_node:
+            _ros_node.destroy_node()
+            _ros_node = None
+
+        if rclpy.ok():
+            rclpy.shutdown()
+
+        return "✓ ROS 节点已关闭"
+
+    except Exception as e:
+        return f"关闭失败: {e}"
+
+
+@mcp.tool()
+async def get_ros_status() -> str:
+    """获取 ROS 节点状态"""
+    global _ros_node
+
+    if _ros_node:
+        return f"节点: {_ros_node.get_name()}, 状态: 运行中"
+    else:
+        return "ROS 节点未初始化"
+
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")

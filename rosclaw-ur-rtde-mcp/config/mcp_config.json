@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "rosclaw-ur-rtde": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/path/to/rosclaw-ur-rtde-mcp",
+        "run",
+        "python",
+        "src/ur_rtde_mcp_server.py"
+      ],
+      "transportType": "stdio",
+      "env": {}
+    }
+  },
+  "_comment": "Replace /path/to/rosclaw-ur-rtde-mcp with the actual path. Requires ur-rtde installed: pip install ur-rtde"
+}

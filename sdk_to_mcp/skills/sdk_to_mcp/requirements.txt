@@ -1,0 +1,23 @@
+# Core MCP Framework
+mcp[cli]>=1.13.0
+fastmcp>=2.11.3
+
+# Document Analysis
+pypdf>=4.0.0
+python-docx>=1.1.0
+
+# Template Engine
+jinja2>=3.1.0
+
+# LLM API (for analysis)
+litellm>=1.0.0
+
+# Code validation
+pytest>=7.0.0
+
+# Type hints
+pydantic>=2.0.0
+
+# Utility
+pyyaml>=6.0
+requests>=2.31.0

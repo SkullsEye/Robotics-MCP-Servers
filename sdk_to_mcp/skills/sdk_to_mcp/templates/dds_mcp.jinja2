@@ -1,0 +1,331 @@
+"""
+DDS 通信 MCP Server 模板
+
+适用于基于 DDS 协议的硬件（如 Unitree G1/G02）
+包含后台异步守护线程监听状态
+"""
+
+import threading
+import asyncio
+import time
+from typing import Optional, Dict, Any, Callable
+from dataclasses import dataclass, field
+from collections import deque
+from mcp.server.fastmcp import FastMCP
+
+# Initialize MCP Server
+mcp = FastMCP("{{ target_name }}")
+
+
+@dataclass
+class DDSMessage:
+    """DDS 消息结构"""
+    topic: str
+    timestamp: float
+    data: Dict[str, Any]
+
+
+@dataclass
+class StateBuffer:
+    """状态缓冲区"""
+    max_size: int = 100
+    buffer: deque = field(default_factory=lambda: deque(maxlen=100))
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def append(self, msg: DDSMessage):
+        with self.lock:
+            self.buffer.append(msg)
+
+    def get_latest(self) -> Optional[DDSMessage]:
+        with self.lock:
+            return self.buffer[-1] if self.buffer else None
+
+    def get_history(self, n: int = 10) -> list:
+        with self.lock:
+            return list(self.buffer)[-n:]
+
+
+class {{ server_class_name }}Bridge:
+    """
+    {{ hardware_info.name | default('DDS Hardware') }} DDS 通信桥接
+
+    设计特点:
+    - 后台守护线程监听 DDS 状态，不阻塞 MCP 主事件循环
+    - 线程安全的状态缓冲区
+    - 异步/同步接口分离
+    """
+
+    def __init__(
+        self,
+        domain_id: int = 0,
+        {% if protocol_details.frequency %}
+        update_rate: float = {{ 1.0 / protocol_details.frequency }}
+        {% else %}
+        update_rate: float = 0.01  # 100Hz default
+        {% endif %}
+    ):
+        self.domain_id = domain_id
+        self.update_rate = update_rate
+        self.connected = False
+
+        # 状态缓冲区
+        self.state_buffers: Dict[str, StateBuffer] = {}
+        {% for state in states %}
+        self.state_buffers["{{ state.name }}"] = StateBuffer(max_size=100)
+        {% endfor %}
+
+        # 回调注册
+        self._callbacks: Dict[str, list] = {}
+
+        # 后台线程
+        self._daemon_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+
+        # 安全限位
+        self.safety_limits = {{ hardware_info.safety_limits | default({}) | tojson }}
+
+    def connect(self) -> bool:
+        """建立 DDS 连接并启动后台监听线程"""
+        try:
+            # TODO: 初始化 DDS 参与者
+            # 这里应该调用 unitree_sdk2 或其他 DDS 库的初始化代码
+
+            self.connected = True
+
+            # 启动后台守护线程
+            self._stop_event.clear()
+            self._daemon_thread = threading.Thread(
+                target=self._dds_listener_daemon,
+                name="DDSListenerDaemon",
+                daemon=True
+            )
+            self._daemon_thread.start()
+
+            return True
+
+        except Exception as e:
+            print(f"DDS 连接失败: {e}")
+            return False
+
+    def disconnect(self):
+        """断开 DDS 连接并停止后台线程"""
+        self._stop_event.set()
+
+        if self._daemon_thread and self._daemon_thread.is_alive():
+            self._daemon_thread.join(timeout=2.0)
+
+        self.connected = False
+
+        # TODO: 清理 DDS 资源
+
+    def _dds_listener_daemon(self):
+        """
+        后台守护线程：监听 DDS 状态更新
+
+        注意：此方法在单独线程中运行，不阻塞 MCP 主循环
+        """
+        print("DDS 监听守护线程已启动")
+
+        while not self._stop_event.is_set():
+            try:
+                # TODO: 实现实际的 DDS 消息轮询
+                # 这里应该调用 DDS API 接收消息
+
+                {% for state in states %}
+                # 模拟 {{ state.name }} 状态更新
+                self.state_buffers["{{ state.name }}"].append(DDSMessage(
+                    topic="/{{ state.name }}",
+                    timestamp=time.time(),
+                    data={"value": 0.0}  # TODO: 替换为实际数据
+                ))
+                {% endfor %}
+
+                # 触发回调
+                self._trigger_callbacks()
+
+                time.sleep(self.update_rate)
+
+            except Exception as e:
+                print(f"DDS 监听错误: {e}")
+                time.sleep(0.1)
+
+        print("DDS 监听守护线程已停止")
+
+    def _trigger_callbacks(self):
+        """触发所有注册的回调"""
+        for topic, callbacks in self._callbacks.items():
+            buffer = self.state_buffers.get(topic)
+            if buffer:
+                latest = buffer.get_latest()
+                if latest:
+                    for callback in callbacks:
+                        try:
+                            callback(latest)
+                        except Exception as e:
+                            print(f"回调执行错误: {e}")
+
+    def register_callback(self, topic: str, callback: Callable[[DDSMessage], None]):
+        """注册状态更新回调"""
+        if topic not in self._callbacks:
+            self._callbacks[topic] = []
+        self._callbacks[topic].append(callback)
+
+    def unregister_callback(self, topic: str, callback: Callable[[DDSMessage], None]):
+        """取消状态更新回调"""
+        if topic in self._callbacks:
+            self._callbacks[topic].remove(callback)
+
+    def get_latest_state(self, state_name: str) -> Optional[DDSMessage]:
+        """获取最新状态（线程安全）"""
+        buffer = self.state_buffers.get(state_name)
+        if buffer:
+            return buffer.get_latest()
+        return None
+
+    def publish_command(self, topic: str, data: Dict[str, Any]) -> bool:
+        """发布控制命令"""
+        if not self.connected:
+            return False
+
+        try:
+            # TODO: 实现实际的 DDS 发布
+            # 这里应该调用 DDS API 发布消息
+            return True
+
+        except Exception as e:
+            print(f"命令发布失败: {e}")
+            return False
+
+    def _validate_safety(self, **kwargs) -> tuple[bool, str]:
+        """安全限位检查"""
+        {% if hardware_info.safety_limits %}
+        {% for limit_name, limit_value in hardware_info.safety_limits.items() %}
+        if "{{ limit_name }}" in kwargs:
+            val = kwargs["{{ limit_name }}"]
+            if abs(val) > {{ limit_value }}:
+                return False, f"{{ limit_name }} 超出安全限位: {{ limit_value }}"
+        {% endfor %}
+        {% endif %}
+        return True, "OK"
+
+
+# Global bridge instance
+_bridge: Optional[{{ server_class_name }}Bridge] = None
+
+
+{% for action in actions %}
+@mcp.tool()
+async def {{ action.name }}(
+    {% for param_name, param_type in action.params.items() %}
+    {{ param_name }}: {{ param_type }}{% if not loop.last %},{% endif %}
+    {% endfor %}
+) -> str:
+    """
+    {{ action.description }}
+    """
+    global _bridge
+
+    if _bridge is None or not _bridge.connected:
+        return "错误: 未连接到 DDS 网络"
+
+    # 安全限位检查
+    valid, msg = _bridge._validate_safety({% for param_name in action.params.keys() %}{{ param_name }}={{ param_name }}{% if not loop.last %}, {% endif %}{% endfor %})
+    if not valid:
+        return f"安全限位检查失败: {msg}"
+
+    try:
+        # 构建命令数据
+        command_data = {
+            {% for param_name in action.params.keys() %}
+            "{{ param_name }}": {{ param_name }},
+            {% endfor %}
+            "timestamp": time.time()
+        }
+
+        # 发布命令
+        success = _bridge.publish_command(
+            topic="/{{ action.name }}",
+            data=command_data
+        )
+
+        if success:
+            return f"✓ {{ action.description }} 命令已发送"
+        else:
+            return f"✗ {{ action.description }} 命令发送失败"
+
+    except Exception as e:
+        return f"错误: {e}"
+
+
+{% endfor %}
+
+{% for state in states %}
+@mcp.resource("{{ state.name }}://current")
+async def get_{{ state.name }}() -> str:
+    """
+    {{ state.description }}
+    {% if state.unit %}单位: {{ state.unit }}{% endif %}
+
+    注意: 此资源从后台守护线程维护的状态缓冲区读取，不会阻塞 MCP 主循环
+    """
+    global _bridge
+
+    if _bridge is None:
+        return "未连接设备"
+
+    try:
+        msg = _bridge.get_latest_state("{{ state.name }}")
+        if msg:
+            return f"{{ state.name }}: {msg.data}"
+        return f"{{ state.name }}: 暂无数据"
+    except Exception as e:
+        return f"读取失败: {e}"
+
+
+{% endfor %}
+
+@mcp.tool()
+async def connect_dds(domain_id: int = 0) -> str:
+    """
+    连接到 DDS 域
+
+    Args:
+        domain_id: DDS 域 ID (默认: 0)
+    """
+    global _bridge
+
+    if _bridge is None:
+        _bridge = {{ server_class_name }}Bridge(domain_id=domain_id)
+
+    if _bridge.connect():
+        return f"✓ 已连接到 DDS 域 {domain_id}"
+    else:
+        return f"✗ 连接失败"
+
+
+@mcp.tool()
+async def disconnect_dds() -> str:
+    """断开 DDS 连接"""
+    global _bridge
+
+    if _bridge:
+        _bridge.disconnect()
+        _bridge = None
+        return "✓ 已断开 DDS 连接"
+
+    return "未连接"
+
+
+@mcp.tool()
+async def get_connection_status() -> str:
+    """获取 DDS 连接状态"""
+    global _bridge
+
+    if _bridge and _bridge.connected:
+        return "状态: 已连接"
+    else:
+        return "状态: 未连接"
+
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")

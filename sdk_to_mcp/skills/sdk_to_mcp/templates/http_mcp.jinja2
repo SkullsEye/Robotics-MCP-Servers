@@ -1,0 +1,285 @@
+"""
+HTTP/REST API MCP Server 模板
+
+适用于基于 HTTP/REST API 的硬件
+"""
+
+import asyncio
+import aiohttp
+from typing import Optional, Dict, Any
+from dataclasses import dataclass
+from mcp.server.fastmcp import FastMCP
+
+# Initialize MCP Server
+mcp = FastMCP("{{ target_name }}")
+
+
+@dataclass
+class APIResponse:
+    """API 响应结构"""
+    status: int
+    data: Dict[str, Any]
+    error: Optional[str] = None
+
+
+class {{ server_class_name }}Bridge:
+    """
+    {{ hardware_info.name | default('HTTP API Hardware') }} HTTP 通信桥接
+
+    功能:
+    - RESTful API 调用
+    - 异步 HTTP 请求
+    - 自动重连和错误处理
+    """
+
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8080",
+        timeout: float = 10.0,
+        api_key: Optional[str] = None
+    ):
+        self.base_url = base_url.rstrip('/')
+        self.timeout = aiohttp.ClientTimeout(total=timeout)
+        self.api_key = api_key
+        self.session: Optional[aiohttp.ClientSession] = None
+
+        # 安全限位
+        self.safety_limits = {{ hardware_info.safety_limits | default({}) | tojson }}
+
+    async def connect(self) -> bool:
+        """建立 HTTP 会话"""
+        try:
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+                headers["X-API-Key"] = self.api_key
+
+            self.session = aiohttp.ClientSession(
+                headers=headers,
+                timeout=self.timeout
+            )
+
+            # 测试连接
+            async with self.session.get(f"{self.base_url}/health") as resp:
+                return resp.status == 200
+
+        except Exception as e:
+            print(f"HTTP 连接失败: {e}")
+            return False
+
+    async def disconnect(self):
+        """关闭 HTTP 会话"""
+        if self.session:
+            await self.session.close()
+            self.session = None
+
+    async def _request(
+        self,
+        method: str,
+        endpoint: str,
+        data: Optional[Dict] = None,
+        params: Optional[Dict] = None
+    ) -> APIResponse:
+        """发送 HTTP 请求"""
+        if not self.session:
+            return APIResponse(status=0, data={}, error="未连接")
+
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+
+        try:
+            async with self.session.request(
+                method=method,
+                url=url,
+                json=data,
+                params=params
+            ) as resp:
+                try:
+                    response_data = await resp.json()
+                except:
+                    response_data = {"text": await resp.text()}
+
+                if resp.status < 400:
+                    return APIResponse(status=resp.status, data=response_data)
+                else:
+                    return APIResponse(
+                        status=resp.status,
+                        data=response_data,
+                        error=f"HTTP {resp.status}"
+                    )
+
+        except asyncio.TimeoutError:
+            return APIResponse(status=0, data={}, error="请求超时")
+        except Exception as e:
+            return APIResponse(status=0, data={}, error=str(e))
+
+    def _validate_safety(self, **kwargs) -> tuple[bool, str]:
+        """安全限位检查"""
+        {% if hardware_info.safety_limits %}
+        {% for limit_name, limit_value in hardware_info.safety_limits.items() %}
+        if "{{ limit_name }}" in kwargs:
+            val = kwargs["{{ limit_name }}"]
+            if abs(val) > {{ limit_value }}:
+                return False, f"{{ limit_name }} 超出安全限位: {{ limit_value }}"
+        {% endfor %}
+        {% endif %}
+        return True, "OK"
+
+
+# Global bridge instance
+_bridge: Optional[{{ server_class_name }}Bridge] = None
+
+
+{% for action in actions %}
+@mcp.tool()
+async def {{ action.name }}(
+    {% for param_name, param_type in action.params.items() %}
+    {{ param_name }}: {{ param_type }}{% if not loop.last %},{% endif %}
+    {% endfor %}
+) -> str:
+    """
+    {{ action.description }}
+    """
+    global _bridge
+
+    if _bridge is None or not _bridge.session:
+        return "错误: 未连接到 API 服务器"
+
+    # 安全限位检查
+    valid, msg = _bridge._validate_safety({% for param_name in action.params.keys() %}{{ param_name }}={{ param_name }}{% if not loop.last %}, {% endif %}{% endfor %})
+    if not valid:
+        return f"安全限位检查失败: {msg}"
+
+    try:
+        # 构建请求数据
+        request_data = {
+            {% for param_name in action.params.keys() %}
+            "{{ param_name }}": {{ param_name }},
+            {% endfor %}
+        }
+
+        # 发送 HTTP 请求
+        response = await _bridge._request(
+            method="POST",
+            endpoint="/{{ action.name }}",
+            data=request_data
+        )
+
+        if response.error:
+            return f"✗ {{ action.description }} 失败: {response.error}"
+
+        return f"✓ {{ action.description }} 成功: {response.data}"
+
+    except Exception as e:
+        return f"错误: {e}"
+
+
+{% endfor %}
+
+{% for state in states %}
+@mcp.resource("{{ state.name }}://current")
+async def get_{{ state.name }}() -> str:
+    """
+    {{ state.description }}
+    {% if state.unit %}单位: {{ state.unit }}{% endif %}
+    """
+    global _bridge
+
+    if _bridge is None:
+        return "未连接"
+
+    try:
+        response = await _bridge._request(
+            method="GET",
+            endpoint="/status/{{ state.name }}"
+        )
+
+        if response.error:
+            return f"读取失败: {response.error}"
+
+        return f"{{ state.name }}: {response.data}"
+    except Exception as e:
+        return f"读取失败: {e}"
+
+
+{% endfor %}
+
+@mcp.tool()
+async def connect_api(base_url: str = "http://localhost:8080", api_key: Optional[str] = None) -> str:
+    """
+    连接到 API 服务器
+
+    Args:
+        base_url: API 基础 URL
+        api_key: API 认证密钥（可选）
+    """
+    global _bridge
+
+    if _bridge is None:
+        _bridge = {{ server_class_name }}Bridge(base_url=base_url, api_key=api_key)
+
+    success = await _bridge.connect()
+
+    if success:
+        return f"✓ 已连接到 {base_url}"
+    else:
+        return f"✗ 连接失败: {base_url}"
+
+
+@mcp.tool()
+async def disconnect_api() -> str:
+    """断开 API 连接"""
+    global _bridge
+
+    if _bridge:
+        await _bridge.disconnect()
+        _bridge = None
+        return "✓ 已断开连接"
+
+    return "未连接"
+
+
+@mcp.tool()
+async def api_get(endpoint: str) -> str:
+    """
+    发送 GET 请求
+
+    Args:
+        endpoint: API 端点路径
+    """
+    global _bridge
+
+    if _bridge is None:
+        return "错误: 未连接"
+
+    response = await _bridge._request("GET", endpoint)
+
+    if response.error:
+        return f"请求失败: {response.error}"
+
+    return f"响应 [{response.status}]: {response.data}"
+
+
+@mcp.tool()
+async def api_post(endpoint: str, data: Dict[str, Any]) -> str:
+    """
+    发送 POST 请求
+
+    Args:
+        endpoint: API 端点路径
+        data: 请求数据
+    """
+    global _bridge
+
+    if _bridge is None:
+        return "错误: 未连接"
+
+    response = await _bridge._request("POST", endpoint, data=data)
+
+    if response.error:
+        return f"请求失败: {response.error}"
+
+    return f"响应 [{response.status}]: {response.data}"
+
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")

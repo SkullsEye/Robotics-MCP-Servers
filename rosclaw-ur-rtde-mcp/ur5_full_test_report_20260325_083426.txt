@@ -1,0 +1,109 @@
+
+======================================================================
+              UR5 RTDE MCP 完整功能测试报告
+======================================================================
+测试时间: 2026-03-25 08:34:14
+测试时长: 11.4 秒
+机器人IP: 192.168.123.6
+======================================================================
+测试结果统计:
+  ✅ 通过:   26
+  ❌ 失败:   5
+  ⚠️  警告:  0
+  ⏭️  跳过:  0
+  总计:     31
+======================================================================
+
+【1. 连接与生命周期】
+  ✅ connect_robot: PASS
+     已连接 192.168.123.6
+  ✅ 重复连接处理: PASS
+     已连接状态下再次连接被正确处理
+
+【2. 机器人信息】
+  ❌ get_robot_info: FAIL
+     getSerialNumber() function is not supported on the dashboard server for PolyScope versions less than 5.6.0
+
+【3. 状态读取】
+  ✅ get_robot_state: PASS
+     Mode=RUNNING
+  ✅ get_tcp_pose: PASS
+     [-0.212, 0.319, 0.41]
+  ✅ get_joint_positions: PASS
+     6 joints read
+  ✅ get_tcp_force: PASS
+     F=[28.2, -11.4, 2.2]
+  ✅ get_digital_io_state: PASS
+     IN=0x0000
+
+【4. 运动学】
+  ✅ get_inverse_kinematics: PASS
+     IK solved, q0=-1.279
+
+【5. 运动控制 - moveJ】
+  ✅ move_joint: PASS
+     Max error=0.0001 rad
+  ✅ move_joint_home: PASS
+     Returned to home
+
+【6. 运动控制 - moveL】
+  ✅ move_linear: PASS
+     Error=0.01cm
+
+【7. 运动控制 - moveJ_IK (新增功能)】
+  ✅ moveJ_IK: PASS
+     Z error=-0.00cm
+  ✅ moveJ_IK_home: PASS
+     Deviation=0.01cm
+
+【8. 高级运动控制】
+  ✅ servo_joint: PASS
+     Servo step executed
+  ✅ speed_joint: PASS
+     SpeedJ executed and stopped
+  ✅ stop_motion: PASS
+     Stop executed
+
+【9. 力控制】
+  ❌ zero_ft_sensor: FAIL
+     F/T sensor zeroed
+  ❌ force_mode: FAIL
+     forceMode返回False
+
+【10. 示教模式】
+  ❌ teach_mode: FAIL
+     Cannot enter teach mode
+
+【11. I/O控制】
+  ✅ set_speed_slider: PASS
+     50% -> 100%
+  ✅ set_digital_output: PASS
+     DO0 toggled
+
+【12. 负载设置】
+  ❌ set_payload: FAIL
+     Payload 0.5kg set
+
+【13. Robotiq夹爪】
+  ✅ connect_gripper: PASS
+     Connected to 192.168.123.6:63352
+  ✅ gripper_activate: PASS
+     Gripper activated
+  ✅ gripper_get_status: PASS
+     Position=3
+  ✅ gripper_open: PASS
+     Position=3
+  ✅ gripper_move: PASS
+     Position=128
+  ✅ gripper_close: PASS
+     Position=230
+  ✅ disconnect_gripper: PASS
+     Gripper disconnected
+
+【14. 断开连接】
+  ✅ disconnect_robot: PASS
+     Successfully disconnected
+
+======================================================================
+结论: 存在 5 个失败项，请检查。
+======================================================================

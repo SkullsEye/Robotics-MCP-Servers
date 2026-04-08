@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rosclaw-gimbal-dance-demo"
+version = "0.1.0"
+description = "ROSClaw Demo: 10-Gimbal Dance Synchronized by LLM Choreographer"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["mcp", "robotics", "gimbal", "multi-agent", "dance", "rosclaw"]
+dependencies = [
+    "mcp[fastmcp]>=1.0.0",
+    "pyserial>=3.5",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+music = [
+    "librosa>=0.10.0",
+    "numpy>=1.24",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+dance-demo      = "dance_mcp_server:main"
+dance-demo-sim  = "dance_mcp_server:main"
+
+[project.urls]
+Homepage   = "https://github.com/ros-claw/rosclaw-examples"
+Repository = "https://github.com/ros-claw/rosclaw-examples"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

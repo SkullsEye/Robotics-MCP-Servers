@@ -1,0 +1,327 @@
+"""
+串口通信 MCP Server 模板
+
+适用于基于字节流/串口协议的硬件（如 GCU 云台）
+包含 struct.pack/unpack 和 CRC 校验逻辑
+"""
+
+import struct
+import serial
+import asyncio
+from typing import Optional, Tuple
+from dataclasses import dataclass
+from mcp.server.fastmcp import FastMCP
+
+# Initialize MCP Server
+mcp = FastMCP("{{ target_name }}")
+
+
+@dataclass
+class ProtocolFrame:
+    """协议帧结构"""
+    header: bytes
+    command: int
+    data: bytes
+    checksum: int
+
+
+class {{ server_class_name }}Bridge:
+    """
+    {{ hardware_info.name | default('Serial Hardware') }} 串口通信桥接
+
+    协议细节:
+    - 帧头: {{ protocol_details.header | default('0xA8 0xE5') }}
+    - 字节序: {{ protocol_details.endian | default('little') }}
+    - 校验: {{ protocol_details.checksum | default('crc16') }}
+    {% if protocol_details.baudrate %}
+    - 波特率: {{ protocol_details.baudrate }}
+    {% endif %}
+    """
+
+    def __init__(
+        self,
+        port: str = "/dev/ttyUSB0",
+        baudrate: int = {{ protocol_details.baudrate | default(115200) }},
+        timeout: float = 1.0
+    ):
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.serial: Optional[serial.Serial] = None
+
+        # 协议常量
+        self.HEADER = bytes.fromhex("{{ protocol_details.header | default('A8 E5') | replace('0x', '') | replace(' ', '') }}")
+        self.ENDIAN = "{{ protocol_details.endian | default('little') }}"
+        {% if protocol_details.checksum %}
+        self.CHECKSUM_ALGO = "{{ protocol_details.checksum }}"
+        {% else %}
+        self.CHECKSUM_ALGO = "crc16"
+        {% endif %}
+
+        # 安全限位
+        self.safety_limits = {{ hardware_info.safety_limits | default({}) | tojson }}
+
+    def connect(self) -> bool:
+        """建立串口连接"""
+        try:
+            self.serial = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=self.timeout
+            )
+            return self.serial.is_open
+        except Exception as e:
+            print(f"串口连接失败: {e}")
+            return False
+
+    def disconnect(self):
+        """断开串口连接"""
+        if self.serial and self.serial.is_open:
+            self.serial.close()
+            self.serial = None
+
+    def _calculate_crc(self, data: bytes) -> int:
+        """
+        计算 CRC 校验码
+        {% if protocol_details.checksum == 'crc16' %}
+        使用 CRC-16/MODBUS
+        {% elif protocol_details.checksum == 'crc32' %}
+        使用 CRC-32
+        {% else %}
+        使用简单校验和
+        {% endif %}
+        """
+        {% if protocol_details.checksum == 'crc16' %}
+        # CRC-16/MODBUS 实现
+        crc = 0xFFFF
+        for byte in data:
+            crc ^= byte
+            for _ in range(8):
+                if crc & 0x0001:
+                    crc = (crc >> 1) ^ 0xA001
+                else:
+                    crc >>= 1
+        return crc
+        {% elif protocol_details.checksum == 'crc32' %}
+        # CRC-32 实现
+        import binascii
+        return binascii.crc32(data) & 0xFFFFFFFF
+        {% else %}
+        # 简单校验和
+        return sum(data) & 0xFF
+        {% endif %}
+
+    def _pack_frame(self, command: int, data: bytes = b"") -> bytes:
+        """
+        打包协议帧
+
+        Frame Structure:
+        [Header(2)] + [Command(1)] + [Length(1)] + [Data(N)] + [Checksum(2)]
+        """
+        length = len(data)
+
+        if self.ENDIAN == "little":
+            frame = self.HEADER + struct.pack("<BB", command, length) + data
+        else:
+            frame = self.HEADER + struct.pack(">BB", command, length) + data
+
+        # 计算校验
+        checksum = self._calculate_crc(frame)
+
+        if self.ENDIAN == "little":
+            frame += struct.pack("<H", checksum)
+        else:
+            frame += struct.pack(">H", checksum)
+
+        return frame
+
+    def _unpack_frame(self, frame: bytes) -> Optional[ProtocolFrame]:
+        """解包协议帧"""
+        if len(frame) < 6:
+            return None
+
+        if not frame.startswith(self.HEADER):
+            return None
+
+        try:
+            if self.ENDIAN == "little":
+                command, length = struct.unpack("<BB", frame[2:4])
+                checksum = struct.unpack("<H", frame[-2:])[0]
+            else:
+                command, length = struct.unpack(">BB", frame[2:4])
+                checksum = struct.unpack(">H", frame[-2:])[0]
+
+            data = frame[4:-2]
+
+            # 验证校验
+            calc_crc = self._calculate_crc(frame[:-2])
+            if calc_crc != checksum:
+                return None
+
+            return ProtocolFrame(
+                header=self.HEADER,
+                command=command,
+                data=data,
+                checksum=checksum
+            )
+        except struct.error:
+            return None
+
+    def _validate_safety(self, **kwargs) -> Tuple[bool, str]:
+        """安全限位检查"""
+        {% if hardware_info.safety_limits %}
+        {% for limit_name, limit_value in hardware_info.safety_limits.items() %}
+        if "{{ limit_name }}" in kwargs:
+            val = kwargs["{{ limit_name }}"]
+            if abs(val) > {{ limit_value }}:
+                return False, f"{{ limit_name }} 超出安全限位: {{ limit_value }}"
+        {% endfor %}
+        {% endif %}
+        return True, "OK"
+
+    def send_command(self, command: int, data: bytes = b"") -> Tuple[bool, bytes]:
+        """发送命令并等待响应"""
+        if not self.serial or not self.serial.is_open:
+            return False, b""
+
+        frame = self._pack_frame(command, data)
+        self.serial.write(frame)
+        self.serial.flush()
+
+        # 读取响应
+        response = self.serial.read(256)
+        if response:
+            parsed = self._unpack_frame(response)
+            if parsed:
+                return True, parsed.data
+
+        return False, b""
+
+
+# Global bridge instance
+_bridge: Optional[{{ server_class_name }}Bridge] = None
+
+
+{% for action in actions %}
+@mcp.tool()
+async def {{ action.name }}(
+    {% for param_name, param_type in action.params.items() %}
+    {{ param_name }}: {{ param_type }}{% if not loop.last %},{% endif %}
+    {% endfor %}
+) -> str:
+    """
+    {{ action.description }}
+    {% if action.command_code %}
+    Command Code: {{ action.command_code }}
+    {% endif %}
+    """
+    global _bridge
+
+    if _bridge is None:
+        _bridge = {{ server_class_name }}Bridge()
+        if not _bridge.connect():
+            return "错误: 无法连接到串口设备"
+
+    # 安全限位检查
+    valid, msg = _bridge._validate_safety({% for param_name in action.params.keys() %}{{ param_name }}={{ param_name }}{% if not loop.last %}, {% endif %}{% endfor %})
+    if not valid:
+        return f"安全限位检查失败: {msg}"
+
+    try:
+        # 打包数据
+        {% if action.params %}
+        {% if protocol_details.endian == 'little' %}
+        data = struct.pack(
+            "<{{ action.params.values() | map('get_struct_fmt') | join('') }}",
+            {% for param_name in action.params.keys() %}{{ param_name }}{% if not loop.last %}, {% endif %}{% endfor %}
+        )
+        {% else %}
+        data = struct.pack(
+            ">{{ action.params.values() | map('get_struct_fmt') | join('') }}",
+            {% for param_name in action.params.keys() %}{{ param_name }}{% if not loop.last %}, {% endif %}{% endfor %}
+        )
+        {% endif %}
+        {% else %}
+        data = b""
+        {% endif %}
+
+        {% if action.command_code %}
+        command_code = {{ action.command_code }}
+        {% else %}
+        command_code = 0x{{ loop.index | format('%02x') }}
+        {% endif %}
+
+        success, response = _bridge.send_command(command_code, data)
+
+        if success:
+            return f"✓ {{ action.description }} 执行成功"
+        else:
+            return f"✗ {{ action.description }} 执行失败"
+
+    except struct.error as e:
+        return f"错误: 参数打包失败 - {e}"
+    except Exception as e:
+        return f"错误: {e}"
+
+
+{% endfor %}
+
+{% for state in states %}
+@mcp.resource("{{ state.name }}://current")
+async def get_{{ state.name }}() -> str:
+    """
+    {{ state.description }}
+    {% if state.unit %}单位: {{ state.unit }}{% endif %}
+    """
+    global _bridge
+
+    if _bridge is None:
+        return "未连接设备"
+
+    try:
+        # TODO: 实现具体的状态读取逻辑
+        # 根据协议发送查询命令并解析响应
+        return f"{{ state.name }}: 读取中..."
+    except Exception as e:
+        return f"读取失败: {e}"
+
+
+{% endfor %}
+
+@mcp.tool()
+async def connect_hardware(port: str = "/dev/ttyUSB0") -> str:
+    """
+    连接到硬件设备
+
+    Args:
+        port: 串口设备路径 (如 /dev/ttyUSB0 或 COM3)
+    """
+    global _bridge
+
+    if _bridge is None:
+        _bridge = {{ server_class_name }}Bridge(port=port)
+
+    if _bridge.connect():
+        return f"✓ 已连接到 {port}"
+    else:
+        return f"✗ 连接失败: {port}"
+
+
+@mcp.tool()
+async def disconnect_hardware() -> str:
+    """断开硬件连接"""
+    global _bridge
+
+    if _bridge:
+        _bridge.disconnect()
+        _bridge = None
+        return "✓ 已断开连接"
+
+    return "未连接设备"
+
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")

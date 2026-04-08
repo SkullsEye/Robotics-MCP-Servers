@@ -1,0 +1,192 @@
+"""
+基础 MCP Server 模板
+
+通用模板，当特定硬件类型的模板不存在时使用
+"""
+
+import asyncio
+from typing import Optional, Dict, Any
+from dataclasses import dataclass
+from mcp.server.fastmcp import FastMCP
+
+# Initialize MCP Server
+mcp = FastMCP("{{ target_name }}")
+
+
+@dataclass
+class HardwareConfig:
+    """硬件配置"""
+    name: str
+    hardware_type: str
+    connection_params: Dict[str, Any]
+
+
+class {{ server_class_name }}Bridge:
+    """
+    {{ hardware_info.name | default('Hardware') }} 通信桥接
+
+    通用实现，可根据具体硬件协议扩展
+    """
+
+    def __init__(self, **kwargs):
+        self.config = HardwareConfig(
+            name="{{ target_name }}",
+            hardware_type="{{ hardware_type }}",
+            connection_params=kwargs
+        )
+        self.connected = False
+
+        # 安全限位
+        self.safety_limits = {{ hardware_info.safety_limits | default({}) | tojson }}
+
+        # 状态缓存
+        self.state_cache: Dict[str, Any] = {}
+
+    async def connect(self) -> bool:
+        """建立硬件连接"""
+        # TODO: 实现具体的连接逻辑
+        self.connected = True
+        return True
+
+    async def disconnect(self):
+        """断开硬件连接"""
+        self.connected = False
+
+    async def send_command(self, command: str, params: Dict[str, Any]) -> tuple[bool, str]:
+        """发送控制命令"""
+        # TODO: 实现具体的命令发送逻辑
+        return True, "命令已发送"
+
+    async def read_state(self, state_name: str) -> Optional[Any]:
+        """读取设备状态"""
+        # TODO: 实现具体的状态读取逻辑
+        return self.state_cache.get(state_name)
+
+    def _validate_safety(self, **kwargs) -> tuple[bool, str]:
+        """安全限位检查"""
+        {% if hardware_info.safety_limits %}
+        {% for limit_name, limit_value in hardware_info.safety_limits.items() %}
+        if "{{ limit_name }}" in kwargs:
+            val = kwargs["{{ limit_name }}"]
+            if abs(val) > {{ limit_value }}:
+                return False, f"{{ limit_name }} 超出安全限位: {{ limit_value }}"
+        {% endfor %}
+        {% endif %}
+        return True, "OK"
+
+
+# Global bridge instance
+_bridge: Optional[{{ server_class_name }}Bridge] = None
+
+
+{% for action in actions %}
+@mcp.tool()
+async def {{ action.name }}(
+    {% for param_name, param_type in action.params.items() %}
+    {{ param_name }}: {{ param_type }}{% if not loop.last %},{% endif %}
+    {% endfor %}
+) -> str:
+    """
+    {{ action.description }}
+    """
+    global _bridge
+
+    if _bridge is None:
+        return "错误: 硬件未连接"
+
+    # 安全限位检查
+    valid, msg = _bridge._validate_safety({% for param_name in action.params.keys() %}{{ param_name }}={{ param_name }}{% if not loop.last %}, {% endif %}{% endfor %})
+    if not valid:
+        return f"安全限位检查失败: {msg}"
+
+    try:
+        # 构建命令参数
+        params = {
+            {% for param_name in action.params.keys() %}
+            "{{ param_name }}": {{ param_name }},
+            {% endfor %}
+        }
+
+        success, result = await _bridge.send_command("{{ action.name }}", params)
+
+        if success:
+            return f"✓ {{ action.description }} 执行成功: {result}"
+        else:
+            return f"✗ {{ action.description }} 执行失败: {result}"
+
+    except Exception as e:
+        return f"错误: {e}"
+
+
+{% endfor %}
+
+{% for state in states %}
+@mcp.resource("{{ state.name }}://current")
+async def get_{{ state.name }}() -> str:
+    """
+    {{ state.description }}
+    {% if state.unit %}单位: {{ state.unit }}{% endif %}
+    """
+    global _bridge
+
+    if _bridge is None:
+        return "未连接设备"
+
+    try:
+        value = await _bridge.read_state("{{ state.name }}")
+        if value is not None:
+            return f"{{ state.name }}: {value}"
+        return f"{{ state.name }}: 暂无数据"
+    except Exception as e:
+        return f"读取失败: {e}"
+
+
+{% endfor %}
+
+@mcp.tool()
+async def connect_hardware(**kwargs) -> str:
+    """
+    连接到硬件设备
+
+    Args:
+        **kwargs: 连接参数（取决于硬件类型）
+    """
+    global _bridge
+
+    if _bridge is None:
+        _bridge = {{ server_class_name }}Bridge(**kwargs)
+
+    success = await _bridge.connect()
+
+    if success:
+        return "✓ 已连接到硬件设备"
+    else:
+        return "✗ 连接失败"
+
+
+@mcp.tool()
+async def disconnect_hardware() -> str:
+    """断开硬件连接"""
+    global _bridge
+
+    if _bridge:
+        await _bridge.disconnect()
+        _bridge = None
+        return "✓ 已断开连接"
+
+    return "未连接设备"
+
+
+@mcp.tool()
+async def get_hardware_status() -> str:
+    """获取硬件连接状态"""
+    global _bridge
+
+    if _bridge and _bridge.connected:
+        return f"状态: 已连接 ({_bridge.config.hardware_type})"
+    else:
+        return "状态: 未连接"
+
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")

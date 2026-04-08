@@ -1,0 +1,121 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: Build
+permissions:
+  contents: read
+  pull-requests: write
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linter:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 4
+      matrix:
+        python-version: [3.12]
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install the project
+        run: uv sync --all-extras --dev
+      - name: Check import order with isort
+        run: uv run isort --check-only --diff src/ tests/
+      - name: Check format with autopep8
+        run: uv run autopep8 --diff --exit-code --recursive src/ tests/
+      - name: Lint with flake8
+        run: uv run flake8 src/ tests/
+
+  type:
+    runs-on: ubuntu-latest
+    container: ros:jazzy-ros-base-noble
+    strategy:
+      max-parallel: 4
+      matrix:
+        python-version: [3.12]
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with: {path: src/nav2_mcp_server}
+      - name: Install dependencies
+        run: |
+          apt update
+          rosdep update --rosdistro jazzy
+          rosdep install --rosdistro jazzy --from-paths src --ignore-src -r -y
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install the project
+        working-directory: src/nav2_mcp_server
+        run: uv sync --all-extras --dev
+      - name: Type check with mypy
+        shell: bash
+        working-directory: src/nav2_mcp_server
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          uv run mypy src/ tests/
+
+  test:
+    runs-on: ubuntu-latest
+    container: ros:jazzy-ros-base-noble
+    strategy:
+      max-parallel: 4
+      matrix:
+        python-version: [3.12]
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with: {path: src/nav2_mcp_server}
+      - name: Install dependencies
+        run: |
+          apt update
+          rosdep update --rosdistro jazzy
+          rosdep install --rosdistro jazzy --from-paths src --ignore-src -r -y
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install the project
+        working-directory: src/nav2_mcp_server
+        run: uv sync --all-extras --dev
+      - name: Run tests with pytest
+        shell: bash
+        working-directory: src/nav2_mcp_server
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          uv run pytest tests/ -v --cov=nav2_mcp_server --cov-report=xml --cov-report=term
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5.3.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          verbose: true
+
+  build:
+    runs-on: ubuntu-latest
+    container: ros:jazzy-ros-base-noble
+    needs: [linter, type, test]
+    strategy:
+      max-parallel: 4
+      matrix:
+        python-version: [3.12]
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          ignore-nothing-to-cache: true
+      - name: Test with python ${{ matrix.python-version }}
+        run: uv run --frozen tox -e py

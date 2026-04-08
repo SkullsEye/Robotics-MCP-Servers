@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rosclaw-ur-rtde-mcp"
+version = "0.1.0"
+description = "ROSClaw MCP Server for Universal Robots via ur_rtde (RTDE protocol, no ROS2 required)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["mcp", "robotics", "universal-robots", "ur-rtde", "rtde", "rosclaw"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "mcp>=1.0.0",
+]
+
+[project.optional-dependencies]
+robot = [
+    "ur-rtde>=2.0.0",   # pip install ur-rtde (requires C++ build deps or wheel)
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+rosclaw-ur-rtde-mcp = "ur_rtde_mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/ros-claw/rosclaw-ur-rtde-mcp"
+Repository = "https://github.com/ros-claw/rosclaw-ur-rtde-mcp"
+Issues = "https://github.com/ros-claw/rosclaw-ur-rtde-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "gcu-gimbal": {
+      "command": "python",
+      "args": [
+        "C:/path/to/gcu_gimbal_mcp_server.py"
+      ],
+      "transportType": "stdio",
+      "autoApprove": []
+    }
+  }
+}

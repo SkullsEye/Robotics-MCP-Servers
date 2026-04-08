@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "rosclaw-gimbal": {
+      "command": "python",
+      "args": ["src/gimbal_mcp_server.py"],
+      "transportType": "stdio",
+      "description": "GCU Camera Gimbal Serial MCP Server"
+    }
+  }
+}

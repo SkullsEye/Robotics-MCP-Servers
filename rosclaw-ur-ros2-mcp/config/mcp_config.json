@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "rosclaw-ur": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "source /opt/ros/humble/setup.bash && python src/ur_mcp_server.py"
+      ],
+      "transportType": "stdio",
+      "description": "Universal Robots UR5/UR5e ROS2 MCP Server"
+    }
+  }
+}

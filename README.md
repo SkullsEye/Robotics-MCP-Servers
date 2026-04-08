@@ -2,6 +2,11 @@
 
 A comprehensive collection of **Model Context Protocol (MCP)** servers for multi-robot control and integration. Provides a unified abstraction layer for controlling diverse robotic systems through natural language interfaces.
 
+<p align="center">
+  <img src="docs/images/framework.png" width="45%" alt="MCP Framework"/>
+  <img src="docs/images/MCP_topology.png" width="45%" alt="MCP Topology"/>
+</p>
+
 ## Supported Robots
 
 | Server | Robot/Device | Protocol |
